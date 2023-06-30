@@ -1,0 +1,132 @@
+%sql
+select c.* except (C.Main_Address_Line_2,C.Main_Address_Line_1,C.Main_City),
+CASE 
+WHEN UPPER(C.Main_Address_Line_1) =  C.Main_Address_Line_1 
+THEN initcap(C.Main_Address_Line_1)
+ELSE C.Main_Address_Line_1 END AS  Main_Address_Line_1,
+CASE 
+WHEN UPPER(C.Main_Address_Line_2) =  C.Main_Address_Line_2 
+THEN initcap(C.Main_Address_Line_2)
+ELSE C.Main_Address_Line_2 END AS  Main_Address_Line_2,
+CASE 
+WHEN UPPER(C.Main_City) = C.Main_City
+THEN initcap(C.Main_City)
+ELSE C.Main_City END AS Main_City
+from (
+select B.* EXCEPT(B.Main_Address_Line_2,B.Main_Address_Line_1,B.Main_City),
+Trim(CASE 
+WHEN RIGHT(B.Main_Address_Line_1, 1) = ',' or RIGHT(B.Main_Address_Line_1, 1) = ' '
+THEN LEFT(B.Main_Address_Line_1, length(B.Main_Address_Line_1)-1)
+WHEN LEFT(B.Main_Address_Line_1, 1) = ',' or LEFT(B.Main_Address_Line_1, 1) = ' '
+THEN RIGHT(B.Main_Address_Line_1, length(B.Main_Address_Line_1)-1)
+ELSE
+B.Main_Address_Line_1 END) AS Main_Address_Line_1,
+Trim(CASE 
+WHEN RIGHT(B.Main_Address_Line_2, 1) = ',' or RIGHT(B.Main_Address_Line_2, 1) = ' '
+THEN LEFT(B.Main_Address_Line_2, length(B.Main_Address_Line_2)-1)
+WHEN LEFT(B.Main_Address_Line_2, 1) = ',' or LEFT(B.Main_Address_Line_2, 1) = ' '
+THEN RIGHT(B.Main_Address_Line_2, length(B.Main_Address_Line_2)-1)
+ELSE
+B.Main_Address_Line_2 END) AS Main_Address_Line_2,
+--trim(REGEXP_REPLACE(regexp_replace(B.Main_City, '(\\d+)', ''), '[ ]+',' ')) as  Main_City
+Trim(CASE
+WHEN RIGHT(B.Main_City, 1) = ',' or RIGHT(B.Main_City, 1) = '-' 
+THEN LEFT(B.Main_City, length(B.Main_City)-1)
+WHEN LEFT(B.Main_City, 1) = ',' or LEFT(B.Main_City, 1) = '-'
+THEN RIGHT(B.Main_City, length(B.Main_City)-1)
+ELSE
+B.Main_City END) AS Main_City
+FROM(
+SELECT
+A.Account_Number,
+--A.Main_Street AS Main_Street,
+CASE WHEN (trim(A.Main_Address_Line_1) = '' or A.Main_Address_Line_1 is null)
+THEN 'Not available'
+ELSE
+A.Main_Address_Line_1 END AS Main_Address_Line_1,
+TRIM(CASE
+WHEN LENGTH(A.Main_Street) > 80
+THEN
+    CASE 
+     WHEN LENGTH(LTRIM(REPLACE(A.Main_Street, A.Main_Address_Line_1, ''))) <= 80
+     THEN LTRIM(REPLACE(A.Main_Street, A.Main_Address_Line_1, ''))
+      WHEN (SUBSTRING(LTRIM(REPLACE(A.Main_Street, A.Main_Address_Line_1, '')),81,1) = ' ' OR   (SUBSTRING(LTRIM(REPLACE(A.Main_Street, A.Main_Address_Line_1, '')),81,1) = ',') ) or (SUBSTRING(LTRIM(REPLACE(A.Main_Street, A.Main_Address_Line_1, '')),80,1) = ' ' OR   (SUBSTRING(LTRIM(REPLACE(A.Main_Street, A.Main_Address_Line_1, '')),80,1) = ',') )
+      THEN LEFT(LTRIM(REPLACE(A.Main_Street, A.Main_Address_Line_1, '')), 80)
+      WHEN (SUBSTRING(LTRIM(REPLACE(A.Main_Street, A.Main_Address_Line_1, '')), 80,1) <> ' ')
+      THEN LEFT(SUBSTRING(LTRIM(REPLACE(A.Main_Street, A.Main_Address_Line_1, '')), 1, 81), 
+                 81 - CHARINDEX(
+    ' ',REVERSE(SUBSTRING(LTRIM(REPLACE(A.Main_Street, A.Main_Address_Line_1, '')), 1, 81))))
+     END 
+      END) AS Main_Address_Line_2,
+A.Main_Postal_Code,
+Trim(CASE WHEN CHARINDEX('CEDEX',Upper(A.Main_City)) > 0  THEN
+    LEFT(A.Main_City, CHARINDEX('CEDEX', Upper(A.Main_City))-1)
+    WHEN CHARINDEX('(', A.Main_City) > 0  THEN
+    LEFT(A.Main_City, CHARINDEX('(', A.Main_City)-1)
+    WHEN CHARINDEX('/', A.Main_City) > 0  THEN
+    CASE when upper(A.Main_City) = 'N/A' then A.Main_City
+    ELSE
+    LEFT(A.Main_City, CHARINDEX('/', A.Main_City)-1)
+    end 
+    WHEN CHARINDEX(
+';', A.Main_City) > 0  THEN
+    LEFT(A.Main_City, CHARINDEX(
+';', A.Main_City)-1)
+    ELSE A.Main_City END) AS Main_City,
+A.Main_Phone,
+A.Country_Code,
+--A.Account_Record_Type,
+A.Account_Name,
+--A.Created_Date,
+--A.Last_Modified_Date,
+A.Created_By
+--A.Last_Modified_By
+FROM(
+SELECT 
+A.OSM_Account_Number__c AS Account_Number,
+A.BillingStreet AS Main_Street,
+TRIM(CASE
+   WHEN LENGTH(A.BillingStreet) <= 80
+THEN  A.BillingStreet
+ WHEN SUBSTRING(A.BillingStreet,81,1) = ' ' or SUBSTRING(A.BillingStreet,81,1) = ',' or SUBSTRING(A.BillingStreet,80,1) = ' ' or SUBSTRING(A.BillingStreet,80,1) = ','
+            THEN LEFT(A.BillingStreet , 80)
+        WHEN SUBSTRING(A.BillingStreet,80,1) <> ' '
+            THEN LEFT(SUBSTRING(A.BillingStreet, 1, 81), 
+             81 - CHARINDEX(
+' ',REVERSE(SUBSTRING(A.BillingStreet, 1, 81))))
+    END) AS Main_Address_Line_1,
+A.BillingPostalCode AS Main_Postal_Code,
+CASE WHEN UPPER(trim(REGEXP_REPLACE(regexp_replace(A.BillingCity, '(\\d+)', ''), '[ ]+',' '))) = trim(REGEXP_REPLACE(regexp_replace(A.BillingCity, '(\\d+)', ''), '[ ]+',' '))
+    THEN initcap(trim(REGEXP_REPLACE(regexp_replace(A.BillingCity, '(\\d+)', ''), '[ ]+',' ')))
+    ELSE  trim(REGEXP_REPLACE(regexp_replace(A.BillingCity, '(\\d+)', ''), '[ ]+',' ')) END AS Main_City,	
+CASE WHEN  (CONTAINS(A.PHONE ,'5555') = TRUE OR A.PHONE  == '+16505692081' OR
+(substring(replace(regexp_replace(replace(A.PHONE,' ','') , '[-\+\)\(\@\+\#\$\%\^\!]+', '') ,'+',''),1,length(replace( regexp_replace(replace(A.PHONE,' ','') , '[-\+\)\(\@\+\#\$\%\^\!]+', ''),'+',''))-1) 
+= substring(replace(regexp_replace(replace(A.PHONE,' ','') , '[-\+\)\(\@\+\#\$\%\^\!]+', ''),'+',''),2,length(replace( regexp_replace(replace(A.PHONE,' ','') , '[-\+\)\(\@\+\#\$\%\^\!]+', ''),'+',''))) ) = TRUE)
+THEN  NULL
+ELSE A.PHONE  END AS Main_Phone,
+A.OSM_Country_Code__c AS Country_Code,
+R.name AS Account_Record_Type,
+CASE WHEN A.NAME = UPPER(A.NAME) THEN INITCAP(A.NAME)
+        ELSE A.NAME
+    END AS Account_Name,
+A.createddate AS Created_Date,
+A.lastmodifieddate AS Last_Modified_Date,
+U.NAME AS Created_By,
+UR.NAME AS Last_Modified_By
+FROM raw_posfdc.Account AS A
+--INNER JOIN raw_posfdc.contact AS C ON A.ACCOUNTID = A.ID
+INNER JOIN raw_posfdc.recordtype AS R ON R.ID = A.RECORDTYPEID
+LEFT JOIN raw_posfdc.User AS U ON U.ID = A.CREATEDBYID
+LEFT JOIN raw_posfdc.User AS UR ON UR.ID = A.LASTMODIFIEDBYID
+WHERE 
+(A.BillingCountry in ('Italy', 'Switzerland', 'Netherlands', 'France', 'Ireland', 'United Kingdom', 'Germany', 'Canada', 'Monaco', 'Belgium', 'Sweden', 'Finland', 'Denmark', 'Iceland', 'Portugal', 'Poland', 'Spain', 'Austria', 'Greece') 
+OR A.OSM_COUNTRY_CODE__C in ('CA','IT','CH','FR','IE','GB','DE','NL','MC','BE','SE','FI','DK','IS','PT','PL','ES','AT','GR'))
+AND A.OSM_STATUS__C = 'Approved'
+AND R.NAME IN ('HCO FR', 'HCO DE', 'HCO UK', 'HCO', 'HCS')
+AND NOT ( A.Name LIKE '%ADAPT%' OR LOWER(A.Name) LIKE '%study%')
+AND A.OSM_ONCOLOGY__C = TRUE
+--A.CREATEDDATE >= @lastProcessedDate or (A.SYSTEMMODSTAMP > @lastprocessedDate and A.OSM_STATUS__C = 'Approved')
+AND A.CREATEDBYID NOT IN (SELECT ID FROM raw_posfdc.User WHERE Name IN ('Jessica Ambrico', 'Ksenia Maksyutenko', 'Paula Sousa Gomes'))
+) as A
+) as B
+) as C
