@@ -1,0 +1,157 @@
+%sql
+select c.* except (C.Main_Address_Line_2,C.Main_Address_Line_1,C.MAILING_CITY),
+CASE 
+WHEN UPPER(C.Main_Address_Line_1) =  C.Main_Address_Line_1 
+THEN initcap(C.Main_Address_Line_1)
+ELSE C.Main_Address_Line_1 END AS  Main_Address_Line_1,
+CASE 
+WHEN UPPER(C.Main_Address_Line_2) =  C.Main_Address_Line_2 
+THEN initcap(C.Main_Address_Line_2)
+ELSE C.Main_Address_Line_2 END AS  Main_Address_Line_2,
+CASE 
+WHEN UPPER(C.MAILING_CITY) =  C.MAILING_CITY 
+THEN initcap(C.MAILING_CITY)
+ELSE C.MAILING_CITY END AS  MAILING_CITY
+from (
+select B.* EXCEPT(B.Main_Address_Line_2,B.Main_Address_Line_1,B.MAILING_CITY),
+Trim(CASE 
+WHEN RIGHT(B.Main_Address_Line_1, 1) = ',' or RIGHT(B.Main_Address_Line_1, 1) = ' '
+THEN LEFT(B.Main_Address_Line_1, length(B.Main_Address_Line_1)-1)
+WHEN LEFT(B.Main_Address_Line_1, 1) = ',' or LEFT(B.Main_Address_Line_1, 1) = ' '
+THEN RIGHT(B.Main_Address_Line_1, length(B.Main_Address_Line_1)-1)
+ELSE
+B.Main_Address_Line_1 END) AS Main_Address_Line_1,
+Trim(CASE 
+WHEN RIGHT(B.Main_Address_Line_2, 1) = ',' or RIGHT(B.Main_Address_Line_2, 1) = ' '
+THEN LEFT(B.Main_Address_Line_2, length(B.Main_Address_Line_2)-1)
+WHEN LEFT(B.Main_Address_Line_2, 1) = ',' or LEFT(B.Main_Address_Line_2, 1) = ' '
+THEN RIGHT(B.Main_Address_Line_2, length(B.Main_Address_Line_2)-1)
+ELSE
+B.Main_Address_Line_2 END) AS Main_Address_Line_2,
+--trim(REGEXP_REPLACE(regexp_replace(B.MAILING_CITY, '(\\d+)', ''), '[ ]+',' ')) as  MAILING_CITY,
+Trim(CASE
+WHEN RIGHT(B.MAILING_CITY, 1) = ',' or RIGHT(B.MAILING_CITY, 1) = '-' 
+THEN LEFT(B.MAILING_CITY, length(B.MAILING_CITY)-1)
+WHEN LEFT(B.MAILING_CITY, 1) = ',' or LEFT(B.MAILING_CITY, 1) = '-'
+THEN RIGHT(B.MAILING_CITY, length(B.MAILING_CITY)-1)
+ELSE
+B.MAILING_CITY END) AS MAILING_CITY
+FROM(
+SELECT
+A.Contact_ID_CT_number,
+A.Salutation,
+A.First_Name,
+A.Middle_Name,
+A.Last_Name,
+A.Specialty,
+A.Other_Specialty,
+--A.Mailing_Street,
+CASE WHEN (trim(A.Main_Address_Line_1) = '' or A.Main_Address_Line_1 is null)
+THEN 'Not available'
+ELSE
+A.Main_Address_Line_1 END AS Main_Address_Line_1,
+Trim(CASE
+WHEN LENGTH(A.Mailing_Street) > 80
+THEN
+    CASE 
+     WHEN LENGTH(LTRIM(REPLACE(A.Mailing_Street, A.Main_Address_Line_1, ''))) <= 80
+     THEN LTRIM(REPLACE(A.Mailing_Street, A.Main_Address_Line_1, ''))
+      WHEN (SUBSTRING(LTRIM(REPLACE(A.Mailing_Street, A.Main_Address_Line_1, '')),81,1) = ' ' OR   (SUBSTRING(LTRIM(REPLACE(A.Mailing_Street, A.Main_Address_Line_1, '')),81,1) = ',') ) or (SUBSTRING(LTRIM(REPLACE(A.Mailing_Street, A.Main_Address_Line_1, '')),80,1) = ' ' OR   (SUBSTRING(LTRIM(REPLACE(A.Mailing_Street, A.Main_Address_Line_1, '')),80,1) = ',') )
+      THEN LEFT(LTRIM(REPLACE(A.Mailing_Street, A.Main_Address_Line_1, '')), 80)
+      WHEN (SUBSTRING(LTRIM(REPLACE(A.Mailing_Street, A.Main_Address_Line_1, '')), 80,1) <> ' ')
+      THEN LEFT(SUBSTRING(LTRIM(REPLACE(A.Mailing_Street, A.Main_Address_Line_1, '')), 1, 81), 
+                 81 - CHARINDEX(
+    ' ',REVERSE(SUBSTRING(LTRIM(REPLACE(A.Mailing_Street, A.Main_Address_Line_1, '')), 1, 81))))
+     END 
+      END) AS Main_Address_Line_2,
+Trim(CASE WHEN CHARINDEX('CEDEX',Upper(A.MAILINGCITY)) > 0  THEN
+    LEFT(A.MAILINGCITY, CHARINDEX('CEDEX', Upper(A.MAILINGCITY))-1)
+    WHEN CHARINDEX('(', A.MAILINGCITY) > 0  THEN
+    LEFT(A.MAILINGCITY, CHARINDEX('(', A.MAILINGCITY)-1)
+    WHEN CHARINDEX('/', A.MAILINGCITY) > 0  THEN
+    CASE when upper(A.MAILINGCITY) = 'N/A' then A.MAILINGCITY
+    ELSE
+    LEFT(A.MAILINGCITY, CHARINDEX('/', A.MAILINGCITY)-1)
+    end 
+    WHEN CHARINDEX(
+';', A.MAILINGCITY) > 0  THEN
+    LEFT(A.MAILINGCITY, CHARINDEX(
+';', A.MAILINGCITY)-1)
+    ELSE A.MAILINGCITY END) AS Mailing_City,
+A.Mailing_Zip_Postal_Code,
+A.Main_Phone,
+A.Country_Code,
+A.Portal_Email,
+A.Account_Number
+--A.Account_Name,
+--A.Created_Date,
+--A.Created_By
+FROM(
+SELECT 
+C.OSM_Contact_CustomerID__c AS Contact_ID_CT_number,
+CASE
+WHEN (C.Salutation = 'Frau' OR C.Salutation = 'Mme' OR C.Salutation ='Mvr' OR C.Salutation ='Ms.') THEN  'Ms.' 
+WHEN (C.Salutation = 'Herr' OR C.Salutation = 'Mr.'  OR C.Salutation = 'Mr') THEN  'Mr.' 
+WHEN C.Salutation = 'Prof.' THEN  'Professor' 
+WHEN (C.Salutation = 'Mrs.' OR C.Salutation = 'Mrs')  THEN 'Mrs.'
+WHEN (C.Salutation = 'Dr.' OR C.Salutation = 'Dr')  THEN 'Dr.'
+ELSE NULL END AS  Salutation,
+CASE 
+WHEN UPPER(C.FirstName) =  C.FirstName 
+THEN initcap(C.FirstName)
+ELSE C.FirstName END AS  First_Name,
+CASE 
+WHEN UPPER(C.MiddleName) =  C.MiddleName 
+THEN initcap(C.MiddleName)
+ELSE C.MiddleName END AS  Middle_Name,
+CASE 
+WHEN UPPER(C.LastName) =  C.LastName 
+THEN initcap(C.LastName)
+ELSE C.LastName END AS  Last_Name,
+C.OSM_SPECIALTY__C AS Specialty,
+C.OSM_OTHER_SPECIALTY__C AS Other_Specialty,
+C.MAILINGSTREET AS Mailing_Street,
+Trim(CASE
+   WHEN LENGTH(C.MailingStreet) <= 80
+THEN  C.MailingStreet
+ WHEN SUBSTRING(C.MailingStreet,81,1) = ' ' or SUBSTRING(C.MailingStreet,81,1) = ',' or SUBSTRING(C.MailingStreet,80,1) = ' ' or SUBSTRING(C.MailingStreet,80,1) = ','
+            THEN LEFT(C.MailingStreet , 80)
+        WHEN SUBSTRING(C.MailingStreet,80,1) <> ' '
+            THEN LEFT(SUBSTRING(C.MailingStreet, 1, 81), 
+             81 - CHARINDEX(
+' ',REVERSE(SUBSTRING(C.MailingStreet, 1, 81))))
+    END) AS Main_Address_Line_1,
+    trim(REGEXP_REPLACE(regexp_replace(C.mailingcity, '(\\d+)', ''), '[ ]+',' '))  AS MAILINGCITY,
+C.MAILINGPOSTALCODE AS Mailing_Zip_Postal_Code,
+CASE WHEN  (CONTAINS(C.PHONE ,'5555') = TRUE OR C.PHONE  == '+16505692081' OR
+--(substring(replace(replace(replace(C.PHONE, ' ', '') ,'-',''),'+',''),1,len(replace(replace(replace(C.PHONE, ' ', '') ,'-',''),'+',''))-1) 
+--= substring(replace(replace(replace(C.PHONE, ' ', '') ,'-',''),'+',''),2,len(replace(replace(replace(C.PHONE, ' ', '') ,'-',''),'+','')))) = TRUE
+(substring(replace(regexp_replace(replace(C.PHONE,' ','') , '[-\+\)\(\@\+\#\$\%\^\!]+', '') ,'+',''),1,length(replace( regexp_replace(replace(C.PHONE,' ','') , '[-\+\)\(\@\+\#\$\%\^\!]+', ''),'+',''))-1) 
+= substring(replace(regexp_replace(replace(C.PHONE,' ','') , '[-\+\)\(\@\+\#\$\%\^\!]+', ''),'+',''),2,length(replace( regexp_replace(replace(C.PHONE,' ','') , '[-\+\)\(\@\+\#\$\%\^\!]+', ''),'+',''))) ) = TRUE)
+THEN  NULL
+ELSE C.PHONE  END AS Main_Phone,
+C.OSM_COUNTRY_CODE__C AS Country_Code,
+C.EMAIL AS Portal_Email,
+A.OSM_Account_Number__c AS Account_Number,
+CASE 
+WHEN UPPER(C.Name) =  C.Name 
+THEN initcap(C.Name)
+ELSE C.Name END AS  Account_Name,
+C.CREATEDDATE AS Created_Date,
+C.Name AS Created_By
+FROM raw_posfdc.contact AS C
+INNER JOIN raw_posfdc.Account AS A ON A.ID = C.ACCOUNTID
+INNER JOIN raw_posfdc.recordtype AS R ON R.ID = C.RECORDTYPEID
+WHERE(C.MAILINGCOUNTRY IN ('Italy', 'Switzerland', 'Netherlands', 'France', 'Ireland', 'United Kingdom', 'Germany', 'Canada', 'Monaco', 'Belgium', 'Sweden', 'Finland', 'Denmark', 'Iceland', 'Portugal', 'Poland', 'Spain', 'Austria', 'Greece') 
+OR C.OSM_COUNTRY_CODE__C IN ('CA','IT','CH','FR','IE','GB','DE','NL','MC','BE','SE','FI','DK','IS','PT','PL','ES','AT','GR'))
+AND C.OSM_STATUS__C = 'Approved'
+AND R.NAME IN ('HCP FR', 'HCP DE', 'HCP UK', 'HCP', 'Other - International')
+AND NOT (A.Name LIKE '%ADAPT%' OR LOWER(A.Name) LIKE '%study%')
+AND C.OSM_ONCOLOGY__C = TRUE
+AND NOT (LOWER(C.LastName) LIKE '%private%' OR LOWER(C.LastName) LIKE '%privado%')
+AND NOT REGEXP_LIKE(C.LastName, '[0-9]')
+AND NOT (LOWER(C.EMAIL) LIKE '%@palex%' OR LOWER(C.EMAIL) LIKE '%@lusopalex%' OR LOWER(C.EMAIL) LIKE '%@genekor%' OR LOWER(C.EMAIL) LIKE '%@komtur%')
+--C.CREATEDDATE >= @lastProcessedDate or (C.SYSTEMMODSTAMP > @lastprocessedDate and C.OSM_STATUS__C = 'Approved')
+) as A
+) as B   
+) as C
