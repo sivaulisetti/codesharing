@@ -1,0 +1,121 @@
+from pyspark.sql import SparkSession
+from datetime import datetime, timedelta
+
+# Retrieve secrets
+username = dbutils.secrets.get(scope="service-accounts", key="po-sfdc-service-user")
+password = dbutils.secrets.get(scope="service-accounts", key="po-sfdc-service-pass")
+security_token = dbutils.secrets.get(scope="service-accounts", key="po-sfdc-service-token")
+
+# Configuration parameters
+databaseName = "raw_posfdc"
+databaseName_test = "sfdc_test"
+tablenames = ["Order"]
+jdbc_url = "jdbc:datadirect:sforce:https://login.salesforce.com"
+
+# Spark Configurations
+spark.conf.set("spark.databricks.delta.schema.autoMerge.enabled", "true")
+spark.sparkContext.setLogLevel("ERROR")
+
+def generate_date_ranges(start, end, interval_months=6):
+    current = start
+    while current < end:
+        yield (current, min(current + timedelta(days=30*interval_months), end))
+        current += timedelta(days=30*interval_months)
+
+
+for tablename in tablenames:
+    try:
+        refresh_start_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+        # Truncate the table for a fresh start
+        if spark.catalog._jcatalog.tableExists(databaseName_test, tablename):
+            # If table exists, then truncate it
+            spark.sql(f"TRUNCATE TABLE {databaseName_test}.{tablename}")
+        else:
+            print(f"Table {databaseName_test}.{tablename} does not exist. No need for truncation.")
+
+
+        # Set upper bound in metadata
+        spark.sql(f"UPDATE {databaseName}.salesforce_metadata SET UpperBound = DATE_ADD(CURRENT_DATE(), 1) WHERE ObjectName = '{tablename}'")
+
+        # Fetch metadata for the table
+        metadata_df = spark.sql(f"SELECT ObjectName, PartitionField, LastRefreshDate, NoOfPartitions, IsFullRefresh, FilteredColumn, UpperBound FROM {databaseName}.salesforce_metadata WHERE ObjectName = '{tablename}'")
+        metadata = metadata_df.collect()[0]
+        
+        PartitionField = metadata["PartitionField"]
+        LastRefreshDate = metadata["LastRefreshDate"]
+        NoOfPartitions = metadata["NoOfPartitions"]
+        FilteredColumn = metadata["FilteredColumn"]
+        UpperBound = metadata["UpperBound"]
+
+        # Fetch min and max LastModifiedDate for the table
+        query_bounds = f"(SELECT MIN(LastModifiedDate) AS MIN_DATE, MAX(LastModifiedDate) AS MAX_DATE FROM {tablename})"
+        date_bounds = (spark.read.format("jdbc")
+                        .option("url", jdbc_url)
+                        .option("driver", "com.ddtek.jdbc.sforce.SForceDriver")
+                        .option("user", username)
+                        .option("password", password)
+                        .option("securitytoken", security_token)
+                        .option("dbtable", query_bounds)
+                        .load())
+        
+        min_date = date_bounds.collect()[0]["MIN_DATE"]
+        max_date = date_bounds.collect()[0]["MAX_DATE"]
+
+        print(min_date)
+        print(max_date)
+
+        date_ranges = generate_date_ranges(min_date, max_date)
+
+        for start_date, end_date in date_ranges:
+            print('\n')
+            print(f"Processing date range: Start Date: {start_date}, End Date: {end_date}")
+            
+            #query = f"(SELECT * FROM {tablename} WHERE {FilteredColumn} >= '{start_date}' AND {FilteredColumn} < '{end_date}')"
+            if end_date == max_date:
+                query = f"(SELECT * FROM {tablename} WHERE {FilteredColumn} >= '{start_date}' AND {FilteredColumn} <= '{end_date}')"
+            else:
+                query = f"(SELECT * FROM {tablename} WHERE {FilteredColumn} >= '{start_date}' AND {FilteredColumn} < '{end_date}')"
+    
+            df = (spark.read.format("jdbc")
+                  .option("url", jdbc_url)
+                  .option("driver", "com.ddtek.jdbc.sforce.SForceDriver")
+                  .option("user", username)
+                  .option("password", password)
+                  .option("securitytoken", security_token)
+                  .option("dbtable", query)
+                  .load())
+
+            print(f"Records for {start_date} to {end_date}: {df.count()}")
+
+            # Deduplicating based on ID immediately
+            df_deduplicated = df.dropDuplicates(["ID"])
+
+            # Check counts after deduplication
+            print(f"Records after deduplication: {df_deduplicated.count()}")
+
+            # Write deduplicated data to the main table
+            if spark.catalog._jcatalog.tableExists(databaseName_test, tablename):
+                print(f"Table {databaseName_test}.{tablename} exists. Appending data.")
+                # If table exists, append the new data to it
+                df_deduplicated.write.format("delta").mode("append").option("mergeSchema", "true").saveAsTable(f"{databaseName_test}.{tablename}")
+            else:
+                print(f"Table {databaseName_test}.{tablename} does not exist. Creating and writing data.")
+                df_deduplicated.write.format("delta").mode("overwrite").saveAsTable(f"{databaseName_test}.{tablename}")
+
+            current_count = spark.sql(f"SELECT COUNT(*) FROM {databaseName_test}.{tablename}").collect()[0][0]
+            print(f"Total records after appending data for {start_date} to {end_date}: {current_count}")
+
+        # Update metadata
+        refresh_end_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        print(f"Successfully processed {databaseName_test}.{tablename}. Start time: {refresh_start_time}, End time: {refresh_end_time}")
+
+        update_metadata_sql = f"""
+        UPDATE {databaseName}.salesforce_metadata
+        SET LastRefreshDate = '{refresh_start_time}', UpperBound = DATE_ADD(CURRENT_DATE(), 1)
+        WHERE ObjectName = '{tablename}'
+        """
+        spark.sql(update_metadata_sql)
+
+    except Exception as e:
+        print(f"Error processing table {tablename}: {str(e)}")
