@@ -1,0 +1,96 @@
+from pyspark.sql import SparkSession
+from datetime import datetime, timedelta
+from pyspark.sql import Window
+from pyspark.sql.functions import row_number
+
+# Retrieve secrets
+username = dbutils.secrets.get(scope="service-accounts", key="po-sfdc-service-user")
+password = dbutils.secrets.get(scope="service-accounts", key="po-sfdc-service-pass")
+security_token = dbutils.secrets.get(scope="service-accounts", key="po-sfdc-service-token")
+
+# Configuration parameters
+databaseName = "raw_posfdc"
+databaseName_test = "sfdc_test"
+tablenames = ["order"]
+jdbc_url = "jdbc:datadirect:sforce:https://login.salesforce.com"
+
+# Spark Configurations
+spark.conf.set("spark.databricks.delta.schema.autoMerge.enabled", "true")
+spark.conf.set("spark.sql.shuffle.partitions", "500")  # Adjust based on resource availability
+spark.conf.set("spark.databricks.delta.optimizeWrite.enabled", "true")
+spark.conf.set("spark.databricks.delta.autoCompact.enabled", "true")
+spark.sparkContext.setLogLevel("ERROR")
+
+for tablename in tablenames:
+    try:
+        refresh_start_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+        # Truncate the table for a fresh start
+        if spark.catalog._jcatalog.tableExists(databaseName_test, tablename):
+            # If table exists, then truncate it
+            print(f"Table {databaseName_test}.{tablename} exist. Need to truncate.")
+            spark.sql(f"TRUNCATE TABLE {databaseName_test}.{tablename}")
+        else:
+            print(f"Table {databaseName_test}.{tablename} does not exist. No need for truncation.")
+
+        # Set upper bound in metadata
+        spark.sql(f"UPDATE {databaseName}.salesforce_metadata SET UpperBound = DATE_ADD(CURRENT_DATE(), 1) WHERE ObjectName = '{tablename}'")
+
+        # Fetch metadata for the table
+        metadata_df = spark.sql(f"SELECT ObjectName, PartitionField, LastRefreshDate, NoOfPartitions, IsFullRefresh, FilteredColumn, UpperBound FROM {databaseName}.salesforce_metadata WHERE ObjectName = '{tablename}'")
+        metadata = metadata_df.collect()[0]
+        
+        PartitionField = metadata["PartitionField"]
+        LastRefreshDate = metadata["LastRefreshDate"]
+        NoOfPartitions = metadata["NoOfPartitions"]
+        FilteredColumn = metadata["FilteredColumn"]
+        UpperBound = metadata["UpperBound"]
+
+        # Read the entire data from Salesforce object into a DataFrame
+        query = f"(SELECT * FROM {tablename})"
+        full_data_df = (spark.read.format("jdbc")
+                        .option("url", jdbc_url)
+                        .option("driver", "com.ddtek.jdbc.sforce.SForceDriver")
+                        .option("LoginTimeOut",90)
+                        .option("StmtCallLimit",0)
+                        .option("user", username)
+                        .option("password", password)
+                        .option("securitytoken", security_token)
+                        .option("dbtable", query)
+                        .option("partitionColumn", PartitionField)
+                        .option("numPartitions", NoOfPartitions)
+                        .option("BulkFetchThreshold", 0)
+                        .option ("EnablePKChunking", 0)
+                        .option ("EnableBulkFetch", 1). 
+                        .option("PKChunkSize", 250000)
+                        .option("lowerBound", LastRefreshDate)
+                        .option("upperBound", UpperBound)
+                        .option("deletedRowsBehavior","include")
+                        .option("WSRetryCount", 10) 
+                        .option("WSTimeout", 0) 
+                        .load())
+
+        # Repartition data based on the metadata's NoOfPartitions and partition by the PartitionField.
+        partition_df = full_data_df.repartition(NoOfPartitions, PartitionField)
+
+        # Write deduplicated data to the main table
+        if spark.catalog._jcatalog.tableExists(databaseName_test, tablename):
+            print(f"Table {databaseName_test}.{tablename} exists. Appending batch data.")
+            full_data_df.write.format("delta").option("dataChange", "false").mode("append").option("mergeSchema", "true").partitionBy(PartitionField).saveAsTable(f"{databaseName_test}.{tablename}")
+        else:
+            print(f"Table {databaseName_test}.{tablename} does not exist. Creating and writing batch data.")
+            full_data_df.write.format("delta").option("dataChange", "false").mode("overwrite").partitionBy(PartitionField).saveAsTable(f"{databaseName_test}.{tablename}")
+
+        # Update metadata
+        refresh_end_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        print(f"Successfully processed {databaseName_test}.{tablename}. Start time: {refresh_start_time}, End time: {refresh_end_time}")
+
+        update_metadata_sql = f"""
+        UPDATE {databaseName}.salesforce_metadata
+        SET LastRefreshDate = '{refresh_end_time}', UpperBound = DATE_ADD(CURRENT_DATE(), 1)
+        WHERE ObjectName = '{tablename}'
+        """
+        spark.sql(update_metadata_sql)
+
+    except Exception as e:
+        print(f"Error processing table {tablename}: {str(e)}")
