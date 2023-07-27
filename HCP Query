@@ -1,5 +1,5 @@
-%sql
-select c.* except (C.Main_Address_Line_2,C.Main_Address_Line_1,C.MAILING_CITY),
+df_hcp_Account = spark.sql (f"""
+select c.* except (C.Mailing_Zip_Postal_Code,C.Main_Address_Line_2,C.Main_Address_Line_1,C.MAILING_CITY),
 CASE 
 WHEN UPPER(C.Main_Address_Line_1) =  C.Main_Address_Line_1 
 THEN initcap(C.Main_Address_Line_1)
@@ -11,7 +11,13 @@ ELSE C.Main_Address_Line_2 END AS  Main_Address_Line_2,
 CASE 
 WHEN UPPER(C.MAILING_CITY) =  C.MAILING_CITY 
 THEN initcap(C.MAILING_CITY)
-ELSE C.MAILING_CITY END AS  MAILING_CITY
+ELSE C.MAILING_CITY END AS  MAILING_CITY,
+CASE
+    WHEN C.Country_Code = 'CA' THEN SUBSTRING(C.Mailing_Zip_Postal_Code, 1, 3)
+    WHEN C.Country_Code = 'FR' THEN TRIM(REPLACE(C.Mailing_Zip_Postal_Code, 'CEDEX', ''))
+    WHEN C.Country_Code = 'GB' THEN TRIM(REPLACE(C.Mailing_Zip_Postal_Code, ', Wales', ''))
+    ELSE C.Mailing_Zip_Postal_Code
+END AS Mailing_Zip_Postal_Code
 from (
 select B.* EXCEPT(B.Main_Address_Line_2,B.Main_Address_Line_1,B.MAILING_CITY),
 Trim(CASE 
@@ -151,7 +157,10 @@ AND C.OSM_ONCOLOGY__C = TRUE
 AND NOT (LOWER(C.LastName) LIKE '%private%' OR LOWER(C.LastName) LIKE '%privado%')
 AND NOT REGEXP_LIKE(C.LastName, '[0-9]')
 AND NOT (LOWER(C.EMAIL) LIKE '%@palex%' OR LOWER(C.EMAIL) LIKE '%@lusopalex%' OR LOWER(C.EMAIL) LIKE '%@genekor%' OR LOWER(C.EMAIL) LIKE '%@komtur%')
---C.CREATEDDATE >= @lastProcessedDate or (C.SYSTEMMODSTAMP > @lastprocessedDate and C.OSM_STATUS__C = 'Approved')
+--AND C.CREATEDDATE >= '{latest_SystemModstamp}' OR (C.SYSTEMMODSTAMP >= '{latest_SystemModstamp}' AND C.OSM_STATUS__C = 'Approved')
 ) as A
-) as B   
+) as B
 ) as C
+""")
+
+df_hcp_Account.display()
