@@ -1,0 +1,59 @@
+%sql
+select 
+x.ContactID,
+x.Full_Name,
+x.Portal_Email,
+x.Country_Code,
+x.Record_Type,
+x.Account_Number,
+x.Account_Country_Code,
+x.Account_Record_Type,
+x.Created_Date,
+x.Created_By
+from (
+SELECT
+C.OSM_CONTACT_CUSTOMERID__C as ContactID,
+CASE
+        WHEN c.Name LIKE '%,'  THEN substring(c.Name, 1, length(c.Name)-1)
+        else c.Name 
+        end as Full_Name,
+C.EMAIL as Portal_Email,
+C.OSM_Country_Code__c as Country_Code,
+CA.OSM_CONTACT_1_RECORD_TYPE__C as Record_Type,
+A.OSM_Account_Number__c as Account_Number,
+A.OSM_COUNTRY_CODE__C as Account_Country_Code, 
+CA.OSM_ACCOUNT_1_RECORD_TYPE__C as Account_Record_Type,
+CA.CREATEDDATE as Created_Date,
+U.NAME as Created_By,
+Row_number() over(partition by A.OSM_Account_Number__c, C.OSM_CONTACT_CUSTOMERID__C order by CA.SystemModStamp Desc) as rnumer
+from raw_posfdc.customer_affiliation__c CA
+INNER JOIN RAW_POSFDC.RecordType SRT ON CA.RecordTypeID = SRT.Id
+AND CA.IsDeleted = 0
+INNER JOIN RAW_POSFDC.Account A ON A.Id = CA.OSM_Account_1__c
+AND A.IsDeleted = 0
+INNER JOIN RAW_POSFDC.RecordType SRTA ON A.RecordTypeID = SRTA.Id
+INNER JOIN RAW_POSFDC.Contact C ON C.Id = CA.OSM_Contact_1__c
+AND C.IsDeleted = 0
+INNER JOIN RAW_POSFDC.RecordType SRTC ON C.RecordTypeID = SRTC.Id
+INNER JOIN raw_posfdc.User U ON U.ID = CA.CREATEDBYID
+where 
+SRT.Name = 'Cnt-Acct Affiliation'
+and NOT (c.osm_oncology__c = false
+or  A.osm_oncology__c = false)
+and CA.OSM_CONTACT_1_RECORD_TYPE__C  not in ('Vendor Associate', 'Other-payor Admin', 'Contact', 'patient', 'Partner')
+and CA.OSM_ACCOUNT_1_RECORD_TYPE__C not in ('Partner','Other')
+AND NOT (A.Name LIKE '%ADAPT%' OR LOWER(A.Name) LIKE '%study%')
+and (C.MAILINGCOUNTRY   in ('Italy', 'Switzerland', 'Netherlands', 'France', 'Ireland', 'United Kingdom', 'Germany', 'Canada', 'Monaco', 'Belgium', 'Sweden', 'Finland', 'Denmark', 'Iceland', 'Portugal','Poland', 'Spain', 'Austria', 'Greece') 
+or C.OSM_Country_Code__c in ('CA','IT','CH','FR','IE','UK','DE','NL','MC','BE','SE','FI','DK','IS','PT','PL','ES','AT','GR'))
+--and CA.CREATEDDATE > current_timestamp() - INTERVAL 24 HOURS
+--and C.CREATEDDATE >= @lastProcessedData or (C.SYSTEMMODSTAMP > @lastprocessedDate and C.OSM_STATUS__C = 'Approved')''
+AND NOT (LOWER(C.LastName) LIKE '%private%' OR LOWER(C.LastName) LIKE '%privado%')
+AND NOT (LOWER(C.LastName) RLIKE '[0-9]')
+AND NOT (LOWER(C.EMAIL) LIKE '%@palex%' OR LOWER(C.EMAIL) LIKE '%@lusopalex%' OR LOWER(C.EMAIL) LIKE '%@genekor%' 
+OR LOWER(C.EMAIL) LIKE '%@komtur%')
+and SRTA.Name in ('HCO FR', 'HCO DE', 'HCO UK', 'HCO', 'HCS')
+and SRTC.Name in ('HCP FR', 'HCP DE', 'HCP UK', 'HCP', 'Other - International')
+and C.OSM_STATUS__C ='Approved'
+and A.OSM_STATUS__C ='Approved'
+)X
+ where X.rnumer = 1
