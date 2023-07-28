@@ -1,0 +1,209 @@
+Method1:
+
+# Convert other sql to data frame.
+
+# Perform LEFT JOIN between df_hcp_Account and df_other_data on a common column, for example, 'ContactID'
+df_left_joined = df_hcp_Account.join(df_other_data, on='ContactID', how='left')
+
+# Display the result of the LEFT JOIN
+df_left_joined.display()
+
+
+
+Method2:
+
+SELECT 
+    x.ContactID,
+    x.Full_Name,
+    x.Portal_Email,
+    x.Country_Code,
+    x.Record_Type,
+    x.Account_Number,
+    x.Account_Country_Code,
+    x.Account_Record_Type,
+    x.Created_Date,
+    x.Created_By,
+    -- Add columns from df_hcp_Account
+    -- Make sure to replace 'df_hcp_Account' with the actual name of the table/view generated from the df_hcp_Account code.
+    -- For example: df_hcp_Account.ColumnName
+    -- Add the columns you want from df_hcp_Account here.
+    -- Example: df_hcp_Account.Main_Address_Line_1, df_hcp_Account.Main_Address_Line_2, etc.
+FROM (
+    -- Your first query
+    SELECT
+        C.OSM_CONTACT_CUSTOMERID__C AS ContactID,
+        CASE
+            WHEN c.Name LIKE '%,' THEN SUBSTRING(c.Name, 1, LENGTH(c.Name)-1)
+            ELSE c.Name 
+        END AS Full_Name,
+        C.EMAIL AS Portal_Email,
+        C.OSM_Country_Code__c AS Country_Code,
+        CA.OSM_CONTACT_1_RECORD_TYPE__C AS Record_Type,
+        A.OSM_Account_Number__c AS Account_Number,
+        A.OSM_COUNTRY_CODE__C AS Account_Country_Code, 
+        CA.OSM_ACCOUNT_1_RECORD_TYPE__C AS Account_Record_Type,
+        CA.CREATEDDATE AS Created_Date,
+        U.NAME AS Created_By,
+        ROW_NUMBER() OVER(PARTITION BY A.OSM_Account_Number__c, C.OSM_CONTACT_CUSTOMERID__C ORDER BY CA.SystemModStamp DESC) AS rnumer
+    FROM raw_posfdc.customer_affiliation__c CA
+    INNER JOIN RAW_POSFDC.RecordType SRT ON CA.RecordTypeID = SRT.Id AND CA.IsDeleted = 0
+    INNER JOIN RAW_POSFDC.Account A ON A.Id = CA.OSM_Account_1__c AND A.IsDeleted = 0
+    INNER JOIN RAW_POSFDC.RecordType SRTA ON A.RecordTypeID = SRTA.Id
+    INNER JOIN RAW_POSFDC.Contact C ON C.Id = CA.OSM_Contact_1__c AND C.IsDeleted = 0
+    INNER JOIN RAW_POSFDC.RecordType SRTC ON C.RecordTypeID = SRTC.Id
+    INNER JOIN raw_posfdc.User U ON U.ID = CA.CREATEDBYID
+    WHERE SRT.Name = 'Cnt-Acct Affiliation'
+    AND NOT (c.osm_oncology__c = false OR A.osm_oncology__c = false)
+    AND CA.OSM_CONTACT_1_RECORD_TYPE__C NOT IN ('Vendor Associate', 'Other-payor Admin', 'Contact', 'patient', 'Partner')
+    AND CA.OSM_ACCOUNT_1_RECORD_TYPE__C NOT IN ('Partner', 'Other')
+    AND NOT (A.Name LIKE '%ADAPT%' OR LOWER(A.Name) LIKE '%study%')
+    AND (C.MAILINGCOUNTRY IN ('Italy', 'Switzerland', 'Netherlands', 'France', 'Ireland', 'United Kingdom', 'Germany', 'Canada', 'Monaco', 'Belgium', 'Sweden', 'Finland', 'Denmark', 'Iceland', 'Portugal','Poland', 'Spain', 'Austria', 'Greece') 
+        OR C.OSM_Country_Code__c IN ('CA', 'IT', 'CH', 'FR', 'IE', 'UK', 'DE', 'NL', 'MC', 'BE', 'SE', 'FI', 'DK', 'IS', 'PT', 'PL', 'ES', 'AT', 'GR'))
+    -- AND CA.CREATEDDATE > current_timestamp() - INTERVAL 24 HOURS
+    -- AND C.CREATEDDATE >= @lastProcessedData OR (C.SYSTEMMODSTAMP > @lastprocessedDate AND C.OSM_STATUS__C = 'Approved')
+    AND NOT (LOWER(C.LastName) LIKE '%private%' OR LOWER(C.LastName) LIKE '%privado%')
+    AND NOT (LOWER(C.LastName) RLIKE '[0-9]')
+    AND NOT (LOWER(C.EMAIL) LIKE '%@palex%' OR LOWER(C.EMAIL) LIKE '%@lusopalex%' OR LOWER(C.EMAIL) LIKE '%@genekor%' OR LOWER(C.EMAIL) LIKE '%@komtur%')
+    AND SRTA.Name IN ('HCO FR', 'HCO DE', 'HCO UK', 'HCO', 'HCS')
+    AND SRTC.Name IN ('HCP FR', 'HCP DE', 'HCP UK', 'HCP', 'Other - International')
+    AND C.OSM_STATUS__C = 'Approved'
+    AND A.OSM_STATUS__C = 'Approved'
+) x
+LEFT JOIN (
+    -- Your second query (df_hcp_Account)
+    SELECT 
+        c.* EXCEPT (C.Mailing_Zip_Postal_Code, C.Main_Address_Line_2, C.Main_Address_Line_1, C.MAILING_CITY),
+        CASE 
+            WHEN UPPER(C.Main_Address_Line_1) = C.Main_Address_Line_1 THEN INITCAP(C.Main_Address_Line_1)
+            ELSE C.Main_Address_Line_1 
+        END AS Main_Address_Line_1,
+        CASE 
+            WHEN UPPER(C.Main_Address_Line_2) = C.Main_Address_Line_2 THEN INITCAP(C.Main_Address_Line_2)
+            ELSE C.Main_Address_Line_2 
+        END AS Main_Address_Line_2,
+        CASE 
+            WHEN UPPER(C.MAILING_CITY) = C.MAILING_CITY THEN INITCAP(C.MAILING_CITY)
+            ELSE C.MAILING_CITY 
+        END AS MAILING_CITY,
+        CASE
+            WHEN C.Country_Code = 'CA' THEN SUBSTRING(C.Mailing_Zip_Postal_Code, 1, 3)
+            WHEN C.Country_Code = 'FR' THEN TRIM(REPLACE(C.Mailing_Zip_Postal_Code, 'CEDEX', ''))
+            WHEN C.Country_Code = 'GB' THEN TRIM(REPLACE(C.Mailing_Zip_Postal_Code, ', Wales', ''))
+            ELSE C.Mailing_Zip_Postal_Code
+        END AS Mailing_Zip_Postal_Code
+    FROM (
+        SELECT B.* EXCEPT (B.Main_Address_Line_2, B.Main_Address_Line_1, B.MAILING_CITY),
+            TRIM(CASE 
+                WHEN RIGHT(B.Main_Address_Line_1, 1) = ',' OR RIGHT(B.Main_Address_Line_1, 1) = ' ' THEN LEFT(B.Main_Address_Line_1, LENGTH(B.Main_Address_Line_1)-1)
+                WHEN LEFT(B.Main_Address_Line_1, 1) = ',' OR LEFT(B.Main_Address_Line_1, 1) = ' ' THEN RIGHT(B.Main_Address_Line_1, LENGTH(B.Main_Address_Line_1)-1)
+                ELSE B.Main_Address_Line_1 
+            END) AS Main_Address_Line_1,
+            TRIM(CASE 
+                WHEN RIGHT(B.Main_Address_Line_2, 1) = ',' OR RIGHT(B.Main_Address_Line_2, 1) = ' ' THEN LEFT(B.Main_Address_Line_2, LENGTH(B.Main_Address_Line_2)-1)
+                WHEN LEFT(B.Main_Address_Line_2, 1) = ',' OR LEFT(B.Main_Address_Line_2, 1) = ' ' THEN RIGHT(B.Main_Address_Line_2, LENGTH(B.Main_Address_Line_2)-1)
+                ELSE B.Main_Address_Line_2 
+            END) AS Main_Address_Line_2,
+            TRIM(CASE 
+                WHEN RIGHT(B.MAILING_CITY, 1) = ',' OR RIGHT(B.MAILING_CITY, 1) = '-' THEN LEFT(B.MAILING_CITY, LENGTH(B.MAILING_CITY)-1)
+                WHEN LEFT(B.MAILING_CITY, 1) = ',' OR LEFT(B.MAILING_CITY, 1) = '-' THEN RIGHT(B.MAILING_CITY, LENGTH(B.MAILING_CITY)-1)
+                ELSE B.MAILING_CITY 
+            END) AS MAILING_CITY
+        FROM (
+            SELECT DISTINCT A.Contact_ID_CT_number,
+                A.Salutation,
+                A.First_Name,
+                A.Middle_Name,
+                A.Last_Name,
+                A.Specialty,
+                A.Other_Specialty,
+                CASE WHEN (TRIM(A.Main_Address_Line_1) = '' OR A.Main_Address_Line_1 IS NULL) THEN 'Not available'
+                    ELSE A.Main_Address_Line_1 
+                END AS Main_Address_Line_1,
+                TRIM(CASE
+                    WHEN LENGTH(A.Mailing_Street) > 80 THEN
+                        CASE 
+                            WHEN LENGTH(LTRIM(REPLACE(A.Mailing_Street, A.Main_Address_Line_1, ''))) <= 80 THEN LTRIM(REPLACE(A.Mailing_Street, A.Main_Address_Line_1, ''))
+                            WHEN (SUBSTRING(LTRIM(REPLACE(A.Mailing_Street, A.Main_Address_Line_1, '')),81,1) = ' ' OR (SUBSTRING(LTRIM(REPLACE(A.Mailing_Street, A.Main_Address_Line_1, '')),81,1) = ',')) OR (SUBSTRING(LTRIM(REPLACE(A.Mailing_Street, A.Main_Address_Line_1, '')),80,1) = ' ' OR (SUBSTRING(LTRIM(REPLACE(A.Mailing_Street, A.Main_Address_Line_1, '')),80,1) = ','))
+                            THEN LEFT(LTRIM(REPLACE(A.Mailing_Street, A.Main_Address_Line_1, '')), 80)
+                            WHEN (SUBSTRING(LTRIM(REPLACE(A.Mailing_Street, A.Main_Address_Line_1, '')), 80,1) <> ' ') THEN LEFT(SUBSTRING(LTRIM(REPLACE(A.Mailing_Street, A.Main_Address_Line_1, '')), 1, 81), 81 - CHARINDEX(' ',REVERSE(SUBSTRING(LTRIM(REPLACE(A.Mailing_Street, A.Main_Address_Line_1, '')), 1, 81))))
+                        END 
+                END) AS Main_Address_Line_2,
+                TRIM(CASE WHEN CHARINDEX('CEDEX', UPPER(A.MAILINGCITY)) > 0 THEN LEFT(A.MAILINGCITY, CHARINDEX('CEDEX', UPPER(A.MAILINGCITY))-1)
+                    WHEN CHARINDEX('(', A.MAILINGCITY) > 0 THEN LEFT(A.MAILINGCITY, CHARINDEX('(', A.MAILINGCITY)-1)
+                    WHEN CHARINDEX('/', A.MAILINGCITY) > 0 THEN
+                        CASE WHEN UPPER(A.MAILINGCITY) = 'N/A' THEN A.MAILINGCITY
+                        ELSE LEFT(A.MAILINGCITY, CHARINDEX('/', A.MAILINGCITY)-1)
+                        END 
+                    WHEN CHARINDEX(';', A.MAILINGCITY) > 0 THEN LEFT(A.MAILINGCITY, CHARINDEX(';', A.MAILINGCITY)-1)
+                    ELSE A.MAILINGCITY 
+                END) AS Mailing_City,
+                A.Mailing_Zip_Postal_Code,
+                A.Main_Phone,
+                A.Country_Code,
+                A.Portal_Email,
+                A.Account_Number
+            FROM (
+                SELECT 
+                    C.OSM_Contact_CustomerID__c AS Contact_ID_CT_number,
+                    CASE
+                        WHEN (C.Salutation = 'Frau' OR C.Salutation = 'Mme' OR C.Salutation ='Mvr' OR C.Salutation ='Ms.') THEN 'Ms.' 
+                        WHEN (C.Salutation = 'Herr' OR C.Salutation = 'Mr.' OR C.Salutation = 'Mr') THEN 'Mr.' 
+                        WHEN C.Salutation = 'Prof.' THEN 'Professor' 
+                        WHEN (C.Salutation = 'Mrs.' OR C.Salutation = 'Mrs') THEN 'Mrs.'
+                        WHEN (C.Salutation = 'Dr.' OR C.Salutation = 'Dr') THEN 'Dr.'
+                        ELSE NULL 
+                    END AS Salutation,
+                    CASE 
+                        WHEN UPPER(C.FirstName) = C.FirstName THEN INITCAP(C.FirstName)
+                        ELSE C.FirstName 
+                    END AS First_Name,
+                    CASE 
+                        WHEN UPPER(C.MiddleName) = C.MiddleName THEN INITCAP(C.MiddleName)
+                        ELSE C.MiddleName 
+                    END AS Middle_Name,
+                    CASE 
+                        WHEN UPPER(C.LastName) = C.LastName THEN INITCAP(C.LastName)
+                        ELSE C.LastName 
+                    END AS Last_Name,
+                    C.OSM_SPECIALTY__C AS Specialty,
+                    C.OSM_OTHER_SPECIALTY__C AS Other_Specialty,
+                    C.MAILINGSTREET AS Mailing_Street,
+                    TRIM(CASE
+                        WHEN LENGTH(C.MailingStreet) <= 80 THEN C.MailingStreet
+                        WHEN SUBSTRING(C.MailingStreet,81,1) = ' ' OR SUBSTRING(C.MailingStreet,81,1) = ',' OR SUBSTRING(C.MailingStreet,80,1) = ' ' OR SUBSTRING(C.MailingStreet,80,1) = ',' THEN LEFT(C.MailingStreet , 80)
+                        WHEN SUBSTRING(C.MailingStreet,80,1) <> ' ' THEN LEFT(SUBSTRING(C.MailingStreet, 1, 81), 81 - CHARINDEX(' ',REVERSE(SUBSTRING(C.MailingStreet, 1, 81))))
+                    END) AS Main_Address_Line_1,
+                    TRIM(REGEXP_REPLACE(REGEXP_REPLACE(C.mailingcity, '(\\d+)', ''), '[ ]+',' ')) AS MAILINGCITY,
+                    C.MAILINGPOSTALCODE AS Mailing_Zip_Postal_Code,
+                    CASE WHEN (CONTAINS(C.PHONE ,'5555') = TRUE OR C.PHONE == '+16505692081' OR (SUBSTRING(REPLACE(REGEXP_REPLACE(C.PHONE, '[-\\+\\)\\(\\@\\+\\#\\$\\%\\^\\!]+', ''), ' ', '') ,'+',''),1,LENGTH(REPLACE(REGEXP_REPLACE(C.PHONE, '[-\\+\\)\\(\\@\\+\\#\\$\\%\\^\\!]+', ''), ' ', ''))-1) = SUBSTRING(REPLACE(REGEXP_REPLACE(C.PHONE, '[-\\+\\)\\(\\@\\+\\#\\$\\%\\^\\!]+', ''), '+',''),2,LENGTH(REPLACE(REGEXP_REPLACE(C.PHONE, '[-\\+\\)\\(\\@\\+\\#\\$\\%\\^\\!]+', ''), '+','')))) = TRUE THEN NULL
+                        ELSE C.PHONE  
+                    END AS Main_Phone,
+                    C.OSM_COUNTRY_CODE__C AS Country_Code,
+                    C.EMAIL AS Portal_Email,
+                    A.OSM_Account_Number__c AS Account_Number,
+                    CASE 
+                        WHEN UPPER(C.Name) = C.Name THEN INITCAP(C.Name)
+                        ELSE C.Name 
+                    END AS Account_Name,
+                    C.CREATEDDATE AS Created_Date,
+                    C.Name AS Created_By
+                FROM raw_posfdc.contact AS C
+                INNER JOIN raw_posfdc.Account AS A ON A.ID = C.ACCOUNTID
+                INNER JOIN raw_posfdc.recordtype AS R ON R.ID = C.RECORDTYPEID
+                LEFT JOIN raw_posfdc.customer_affiliation__c CA ON C.Id = CA.OSM_Contact_1__c
+                WHERE (C.MAILINGCOUNTRY IN ('Italy', 'Switzerland', 'Netherlands', 'France', 'Ireland', 'United Kingdom', 'Germany', 'Canada', 'Monaco', 'Belgium', 'Sweden', 'Finland', 'Denmark', 'Iceland', 'Portugal', 'Poland', 'Spain', 'Austria', 'Greece') 
+                    OR C.OSM_COUNTRY_CODE__C IN ('CA','IT','CH','FR','IE','GB','DE','NL','MC','BE','SE','FI','DK','IS','PT','PL','ES','AT','GR'))
+                AND C.OSM_STATUS__C = 'Approved'
+                AND R.NAME IN ('HCP FR', 'HCP DE', 'HCP UK', 'HCP', 'Other - International')
+                AND NOT (A.Name LIKE '%ADAPT%' OR LOWER(A.Name) LIKE '%study%')
+                AND C.OSM_ONCOLOGY__C = TRUE
+                AND NOT (LOWER(C.LastName) LIKE '%private%' OR LOWER(C.LastName) LIKE '%privado%')
+                AND NOT REGEXP_LIKE(C.LastName, '[0-9]')
+                AND NOT (LOWER(C.EMAIL) LIKE '%@palex%' OR LOWER(C.EMAIL) LIKE '%@lusopalex%' OR LOWER(C.EMAIL) LIKE '%@genekor%' OR LOWER(C.EMAIL) LIKE '%@komtur%')
+                AND C.CREATEDDATE >= '{latest_SystemModstamp}' OR (C.SYSTEMMODSTAMP >= '{latest_SystemModstamp}' AND C.OSM_STATUS__C = 'Approved') OR CA.SystemModstamp >= '{latest_SystemModstamp}'
+            ) AS A
+        ) AS B
+    ) AS C
+    -- ON condition for the LEFT JOIN
+    ON x.ContactID = C.OSM_CONTACT_CUSTOMERID__C
+WHERE X.rnumer = 1;
